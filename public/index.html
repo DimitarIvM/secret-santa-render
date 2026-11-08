@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Secret Santa</title>
+<style>
+:root{--bg:#fbf6ef;--card:#fff;--ink:#2a2220;--mute:#7a6e68;--line:#eadfd3;--red:#c0392b;--green:#2e7d5b;--taken:#f1ebe4;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1716;--card:#272020;--ink:#f3ebe6;--mute:#a89b94;--line:#3a302e;--red:#e5594a;--green:#4fb88a;--taken:#2f2625;color-scheme:dark}}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:640px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:26px;margin:4px 0 2px}
+.sub{color:var(--mute);margin:0 0 18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+h2{font-size:15px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute)}
+input,textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;background:var(--bg);color:var(--ink);margin-top:8px}
+textarea{min-height:130px}
+button{font:inherit;border:0;border-radius:10px;padding:10px 14px;background:var(--red);color:#fff;cursor:pointer}
+button.ghost{background:transparent;color:var(--mute);border:1px solid var(--line)}
+button.big{font-size:18px;padding:14px 22px;width:100%;margin-top:14px}
+button:disabled{opacity:.5;cursor:not-allowed}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.chip{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:10px;padding:10px;text-align:left}
+.btns{display:flex;gap:8px;margin-top:12px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);margin-bottom:8px;background:var(--bg)}
+.row.taken{background:var(--taken)}
+.row .n{font-weight:600}
+.row.me .n::after{content:" (you)";font-weight:400;color:var(--mute)}
+.tag{font-size:13px;color:var(--mute)}
+.tag.ok{color:var(--green)}
+.result{font-size:20px;text-align:center;margin-top:12px}
+.err{color:var(--red);margin:8px 0 0}
+summary{cursor:pointer;color:var(--mute)}
+.wheelwrap{position:relative;width:min(320px,100%);margin:14px auto 0}
+.wheelwrap canvas{display:block;width:100%;height:auto;border-radius:50%;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+.pointer{position:absolute;top:-8px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:13px solid transparent;border-right:13px solid transparent;border-top:24px solid var(--ink);z-index:2}
+</style>
+</head>
+<body>
+<main>
+<h1>🎅 Secret Santa</h1>
+<p class="sub">Everyone is on the wheel. Names are drawn at random, and only you can see who you got.</p>
+<div id="top"></div>
+<div id="board"></div>
+<div id="admin"></div>
+</main>
+<script>
+(function(){
+var $=function(id){return document.getElementById(id)};
+var status=null,me=null,pin='',result=null,step='pick',msg='',busy=false,spinning=false,justSpun=false,hadGame=null;
+var COLORS=['#c0392b','#2e7d5b','#d68910','#2874a6','#8e44ad','#117a65','#b9770e'];
+
+var wheelWrap=document.createElement('div');wheelWrap.className='wheelwrap';
+var pointer=document.createElement('div');pointer.className='pointer';
+var wheel=document.createElement('canvas');wheel.width=640;wheel.height=640;
+wheelWrap.appendChild(pointer);wheelWrap.appendChild(wheel);
+
+function drawWheel(list){
+ var ctx=wheel.getContext('2d'),S=wheel.width,r=S/2,n=list.length;ctx.clearRect(0,0,S,S);if(!n)return;
+ var a=2*Math.PI/n;
+ for(var i=0;i<n;i++){
+  var col=COLORS[i%COLORS.length];if(i===n-1&&n>1&&col===COLORS[0])col='#555';
+  ctx.beginPath();ctx.moveTo(r,r);ctx.arc(r,r,r-4,-Math.PI/2+i*a,-Math.PI/2+(i+1)*a);ctx.closePath();
+  ctx.fillStyle=col;ctx.fill();ctx.lineWidth=3;ctx.strokeStyle='#fff';ctx.stroke();
+  ctx.save();ctx.translate(r,r);ctx.rotate(-Math.PI/2+(i+0.5)*a);
+  ctx.textAlign='right';ctx.fillStyle='#fff';ctx.font='bold 30px system-ui,sans-serif';
+  var t=list[i];if(t.length>14)t=t.slice(0,13)+'…';ctx.fillText(t,r-30,10);ctx.restore();
+ }
+ ctx.beginPath();ctx.arc(r,r,26,0,2*Math.PI);ctx.fillStyle='#fff';ctx.fill();
+ ctx.beginPath();ctx.arc(r,r,12,0,2*Math.PI);ctx.fillStyle='#c0392b';ctx.fill();
+}
+function resetWheel(){wheel.style.transition='none';wheel.style.transform='rotate(0deg)'}
+
+function el(tag,props,kids){var e=document.createElement(tag);props=props||{};
+ for(var k in props){if(k==='class')e.className=props[k];else if(k==='text')e.textContent=props[k];else if(k.slice(0,2)==='on')e.addEventListener(k.slice(2),props[k]);else if(k==='disabled'){e.disabled=!!props[k]}else e.setAttribute(k,props[k])}
+ (kids||[]).forEach(function(c){if(c)e.appendChild(c)});return e}
+function sleep(ms){return new Promise(function(r){setTimeout(r,ms)})}
+
+async function api(path,body){
+ var r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:undefined);
+ var j={};try{j=await r.json()}catch(e){}
+ if(!r.ok)throw new Error(j.error||'Something went wrong');
+ return j;
+}
+
+function renderTop(){
+ var top=$('top');top.textContent='';
+ if(!status){top.appendChild(el('p',{class:'sub',text:msg||'Loading…'}));return}
+ if(status.names===null){top.appendChild(el('div',{class:'card'},[el('div',{text:'No game yet. Waiting for the organizer to set it up.'})]));return}
+ var names=status.names,c=el('div',{class:'card'});
+ if(step==='pick'||!me){
+  c.appendChild(el('h2',{text:'Who are you?'}));
+  var g=el('div',{class:'grid'});
+  names.forEach(function(n){g.appendChild(el('button',{class:'chip',text:n+(status.drawn[n]?' ✅':''),onclick:function(){me=n;pin='';msg='';step='pin';renderTop()}}))});
+  c.appendChild(g);
+ }else if(step==='pin'){
+  c.appendChild(el('h2',{text:'Hi '+me+' 👋'}));
+  c.appendChild(el('div',{text:status.claimed[me]?'Enter your PIN.':'Choose a PIN (4 to 8 digits). You’ll need it to see your result again.'}));
+  var inp=el('input',{type:'password',inputmode:'numeric',autocomplete:'off',maxlength:'8',placeholder:'PIN'});
+  inp.addEventListener('keydown',function(e){if(e.key==='Enter')go()});
+  c.appendChild(inp);
+  var go=async function(){
+   if(busy)return;pin=inp.value;busy=true;msg='';
+   try{var r=await api('/api/enter',{name:me,pin:pin});result=r.target;justSpun=false;step='play';await refresh()}
+   catch(e){msg=e.message}
+   busy=false;renderTop();
+  };
+  c.appendChild(el('div',{class:'btns'},[el('button',{text:'Continue',onclick:go}),el('button',{class:'ghost',text:'Back',onclick:function(){me=null;msg='';step='pick';renderTop()}})]));
+ }else{
+  c.appendChild(el('h2',{text:'Hi '+me+' 👋'}));
+  if(!result){
+   c.appendChild(el('div',{text:'Spin the wheel to draw a name from the hat. You can only draw once, so no peeking and no redo!'}));
+   resetWheel();drawWheel(names);c.appendChild(wheelWrap);
+   c.appendChild(el('button',{class:'big',id:'spin',text:'🎩 Draw a name',onclick:spin}));
+  }else{
+   if(justSpun)c.appendChild(wheelWrap);
+   c.appendChild(el('div',{class:'result',text:'🎁 You’re gifting '+result+'!'}));
+  }
+  c.appendChild(el('div',{class:'btns'},[el('button',{class:'ghost',text:'That’s not me',onclick:function(){me=null;pin='';result=null;justSpun=false;msg='';step='pick';renderTop()}})]));
+ }
+ if(msg)c.appendChild(el('p',{class:'err',text:msg}));
+ top.appendChild(c);
+}
+
+async function spin(){
+ if(busy)return;busy=true;spinning=true;msg='';
+ var b=$('spin');if(b){b.disabled=true;b.textContent='Drawing…'}
+ try{
+  var r=await api('/api/draw',{name:me,pin:pin});
+  var idx=status.names.indexOf(r.target),n=status.names.length,a=360/n,jit=(Math.random()-0.5)*a*0.7;
+  var deg=360*(5+Math.floor(Math.random()*3))-((idx+0.5)*a+jit);
+  wheel.style.transition='none';wheel.style.transform='rotate(0deg)';void wheel.offsetWidth;
+  wheel.style.transition='transform 5s cubic-bezier(.12,.6,.1,1)';wheel.style.transform='rotate('+deg+'deg)';
+  await sleep(5300);
+  result=r.target;justSpun=true;
+ }catch(e){msg=e.message}
+ busy=false;spinning=false;await refresh();renderTop();
+}
+
+function renderBoard(){
+ var bd=$('board');bd.textContent='';
+ if(!status||status.names===null)return;
+ var done=0;status.names.forEach(function(n){if(status.drawn[n])done++});
+ var c=el('div',{class:'card'},[el('h2',{text:'Everyone ('+done+' of '+status.names.length+' have drawn)'})]);
+ status.names.forEach(function(n){
+  var d=status.drawn[n];
+  c.appendChild(el('div',{class:'row'+(d?' taken':'')+(n===me?' me':'')},[el('div',{},[el('div',{class:'n',text:n}),el('div',{class:'tag'+(d?' ok':''),text:d?'✅ Has drawn':'Waiting to draw'})])]));
+ });
+ bd.appendChild(c);
+}
+
+function renderAdmin(){
+ var ad=$('admin');ad.textContent='';
+ if(!status)return;
+ var d=el('details',{class:'card'},[el('summary',{text:'Organizer'})]);
+ var pw=el('input',{type:'password',placeholder:'Organizer password',autocomplete:'off'});
+ var note=el('p',{class:'tag'});
+ d.appendChild(pw);
+ var run=async function(path,extra){
+  try{await api(path,Object.assign({password:pw.value},extra||{}));note.className='tag ok';note.textContent='Done.';me=null;pin='';result=null;step='pick';await refresh(true)}
+  catch(e){note.className='err';note.textContent=e.message}
+ };
+ if(status.names===null){
+  var ta=el('textarea',{placeholder:'One name per line'});
+  d.appendChild(ta);
+  d.appendChild(el('div',{class:'btns'},[el('button',{text:'Create game',onclick:function(){run('/api/admin/setup',{names:ta.value})}})]));
+ }else{
+  var armed=false,btn=el('button',{class:'ghost',text:'Reset game',onclick:function(){
+   if(!armed){armed=true;btn.textContent='Tap again to erase everything';return}
+   run('/api/admin/reset');
+  }});
+  d.appendChild(el('div',{class:'btns'},[btn]));
+ }
+ d.appendChild(note);
+ ad.appendChild(d);
+}
+
+async function refresh(force){
+ try{
+  var s=await api('/api/status');
+  var has=s.names!==null,changed=JSON.stringify(s)!==JSON.stringify(status);
+  status=s;
+  if(has&&me&&s.names.indexOf(me)<0){me=null;step='pick'}
+  if(changed||force){renderBoard();if(hadGame!==has||force){hadGame=has;if(!spinning){renderTop();renderAdmin()}}}
+ }catch(e){if(!status){msg='Can’t reach the server. Retrying…';renderTop()}}
+}
+
+refresh(true);
+setInterval(function(){if(!spinning&&!busy)refresh()},6000);
+})();
+</script>
+</body>
+</html>
